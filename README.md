@@ -1,39 +1,51 @@
 # Atelier 3D
 
-Ứng dụng web tiếng Việt để lập kế hoạch bằng LLM và thực thi thao tác dựng hình, chiếu sáng, đặt camera và render trên máy làm việc qua MCP.
+[**Mở Atelier 3D**](https://neito112.github.io/atelier-3d/)
+
+Nhập yêu cầu thiết kế và theo dõi phần mềm 3D dựng cảnh, chiếu sáng và render trên máy của bạn.
 
 ## Bắt đầu
 
-1. Tải hai tệp `bridge.py` và `index.html` về cùng một thư mục. Máy làm việc cần Python 3.10+ và Blender. Trên Windows, mở PowerShell ở thư mục đó và chạy:
+1. Trong app, chọn **Blender → Tải bộ cài** để lấy `atelier_3d_blender.zip`.
+2. Trong Blender 4.3+, mở **Edit → Preferences → Add-ons → Install from Disk**. Chọn tệp ZIP và bật **Atelier 3D Gateway**.
+3. Trong cửa sổ 3D Viewport, nhấn **N**, mở tab **Atelier 3D** và bấm **Start gateway and open app**. App nhận mã kết nối của phiên này. Chọn **Kiểm tra kết nối** để xác nhận. Nếu trình duyệt hạn chế truy cập mạng nội bộ từ GitHub Pages, bấm **Open local app** trong Blender.
+4. Bấm **Chạy cảnh mẫu Blender** để thử mà không cần tài khoản AI. Hoặc kết nối ChatGPT/chọn nhà cung cấp khác, nhập yêu cầu, rồi bấm **Dựng và render**.
 
-   ```powershell
-   py bridge.py --blender "C:\Program Files\Blender Foundation\Blender 4.3\blender.exe"
-   ```
+Blender chạy trong một tiến trình nền. App hiển thị tiến độ, bản xem trước và ảnh cuối, đồng thời cung cấp nút tải `scene.blend` và `render.png`. Tiện ích lưu kết quả trong `Atelier 3D/outputs` ở thư mục người dùng. Mỗi lần chạy tạo một cảnh mới.
 
-   Thay đường dẫn bằng vị trí Blender thực tế. Nếu lệnh `blender` đã có trong PATH, chạy `py bridge.py` trên Windows hoặc `python3 bridge.py` trên macOS/Linux.
+## Kết nối ChatGPT
 
-2. Mở [Atelier 3D trên GitHub Pages](https://neito112.github.io/atelier-3d/) và nhập mã ghép nối in trong cửa sổ bridge. Nếu trình duyệt chặn truy cập mạng nội bộ, mở ứng dụng từ bridge tại [127.0.0.1:8765](http://127.0.0.1:8765). Giữ cửa sổ bridge đang chạy.
-3. Chọn **Nạp cảnh mẫu Blender**, xem các bước và bấm **Duyệt và chạy**. Luồng mẫu chạy không cần API key. Kết quả gồm `scene.blend` và `render.png`, nằm trong `outputs/<mã tác vụ>/` trên máy làm việc.
-4. Để dùng AI, chọn nhà cung cấp, điền mã model và API key, nhập yêu cầu rồi chọn **Tạo kế hoạch bằng AI**. Kiểm tra JSON, sau đó bấm **Duyệt và chạy**. Mỗi tác vụ Blender tạo cảnh mới trong một tiến trình độc lập.
+1. Cài [Codex CLI chính thức](https://developers.openai.com/codex/cli), sau đó khởi động lại gateway. Có thể đặt `ATELIER_CODEX_BIN` nếu Blender hoặc gateway không tìm được lệnh `codex`.
+2. Bấm **Kết nối ChatGPT**, rồi xác nhận tài khoản đang đăng nhập trên trang OpenAI vừa mở. Atelier sử dụng hồ sơ Codex riêng ở `~/.atelier-3d/codex`.
+3. App hiển thị phần trăm **hạn mức Codex còn lại**, theo từng khoảng thời gian và thời điểm đặt lại nếu máy chủ cung cấp. Dùng **Làm mới hạn mức** để đọc lại.
 
-### Nhà cung cấp LLM
+ChatGPT chạy qua Codex App Server trên máy. Quyền xác thực nằm ở hồ sơ cục bộ. ChatGPT chỉ chuyển yêu cầu thành dữ liệu dựng hình; gateway xác thực dữ liệu và Blender thực thi bộ thao tác dựng cảnh.
 
-| Nhà cung cấp | Biến môi trường để dùng thay ô API key |
+## Nhà cung cấp AI khác
+
+Mở nhóm **Nhà cung cấp AI khác**. Nhập mã model và API key hoặc đặt các biến môi trường bên dưới. Với API tương thích, nhập URL gốc trực tiếp trong app hoặc đặt biến cho gateway.
+
+| Nhà cung cấp | Cấu hình gateway |
 | --- | --- |
 | OpenAI | `ATELIER_OPENAI_KEY` |
 | Anthropic Claude | `ATELIER_ANTHROPIC_KEY` |
+| API tương thích Anthropic Messages | `ATELIER_ANTHROPIC_COMPATIBLE_KEY`, `ATELIER_ANTHROPIC_COMPATIBLE_URL` |
 | Google Gemini | `ATELIER_GEMINI_KEY` |
 | OpenRouter | `ATELIER_OPENROUTER_KEY` |
-| API tương thích OpenAI, ví dụ Ollama | `ATELIER_COMPATIBLE_KEY` khi máy chủ yêu cầu và `ATELIER_COMPATIBLE_URL`, ví dụ `http://127.0.0.1:11434/v1` |
+| API tương thích OpenAI | `ATELIER_COMPATIBLE_KEY`, `ATELIER_COMPATIBLE_URL` |
 
-Bridge gửi yêu cầu và lược đồ công cụ đã chọn đến nhà cung cấp LLM. API key nhập trong ứng dụng chỉ giữ trong phiên trang và được gửi qua bridge đến nhà cung cấp đã chọn. Kế hoạch Blender là dữ liệu JSON đã kiểm tra, chạy bằng bộ thao tác có sẵn. API key và tệp đầu ra không cần đưa lên GitHub.
+API tương thích Anthropic nhận URL gốc như `https://api.example.com/v1` hoặc URL đầy đủ kết thúc bằng `/messages`. Gateway dùng định dạng Anthropic Messages và header `x-api-key` nếu có khóa. API key nhập trong giao diện giữ trong phiên trang, được gateway gửi đến đúng nhà cung cấp đã chọn.
 
-### SketchUp, 3ds Max và phần mềm khác
+## SketchUp, 3ds Max và phần mềm khác
 
-Cài và chạy máy chủ MCP của phần mềm đích, rồi điền URL Streamable HTTP và mã Bearer nếu cần. Máy chủ phải cho phép nguồn trang ứng dụng bằng CORS, bao gồm các header yêu cầu `Content-Type`, `Authorization`, `MCP-Protocol-Version`, `Mcp-Session-Id` và phải expose `Mcp-Session-Id` nếu có phiên. Sau khi nạp danh sách, đánh dấu các công cụ muốn dùng để lập kế hoạch. Có thể nhập trực tiếp JSON các bước rồi bấm **Duyệt và chạy**.
+1. Chọn phần mềm, bấm **Tải bộ cài** và giải nén gói gateway dùng chung. Trên Windows, chạy `start_gateway.cmd` với Python 3.10+ đã cài. Trên macOS/Linux, chạy `python3 bridge.py --open`.
+2. Mở máy chủ MCP Streamable HTTP riêng của phần mềm. Dùng một máy chủ tin cậy hỗ trợ các chức năng dựng hình hoặc render cần thiết. Sau đó chọn phần mềm trên app, điền URL và bấm **Kiểm tra kết nối**.
+3. Chọn các công cụ MCP cho phép chạy sau khi gửi yêu cầu. Nếu máy chủ gửi sự kiện tiến độ trong luồng POST và trả ảnh trong nội dung công cụ, app hiển thị tiến độ và ảnh.
 
-Kết nối này thực thi công cụ do máy chủ đích cung cấp. SketchUp, 3ds Max và Corona cần bộ kết nối riêng có đúng công cụ dựng và render. Phiên đầu hỗ trợ MCP Streamable HTTP, phản hồi JSON hoặc SSE của yêu cầu POST. Máy chủ chỉ có stdio hoặc HTTP+SSE đời cũ cần cổng chuyển đổi tương thích. Kết quả của máy chủ ngoài hiển thị dưới dạng phản hồi MCP. Khi một bước ngoài lỗi, ứng dụng dừng ở bước đó. Các bước đã chạy có thể đã thay đổi cảnh.
+Máy chủ ngoài cần CORS cho nguồn trang, gồm các header `Content-Type`, `Authorization`, `MCP-Protocol-Version`, `Mcp-Session-Id` và expose `Mcp-Session-Id` nếu có phiên. Gói gateway dành cho phần mềm ngoài chạy độc lập. SketchUp, 3ds Max và Corona cần bộ kết nối MCP phù hợp được cài riêng.
 
-### Chạy ở kho GitHub khác
+## Chạy và đóng gói từ mã nguồn
 
-Trong **Settings → Pages**, chọn **Deploy from a branch → main → / (root)**. Chạy bridge với `--origin https://<tài-khoản>.github.io` nếu dùng tên miền tài khoản khác. GitHub Pages phục vụ giao diện tĩnh. Máy làm việc chạy Blender và giữ các tệp kết quả. MCP Blender tích hợp có địa chỉ `http://127.0.0.1:8765/mcp` và yêu cầu mã ghép nối dưới dạng Bearer token.
+- Chạy `python3 bridge.py --open` để mở gateway cục bộ. Có thể truyền `--blender` kèm đường dẫn Blender.
+- Sau khi sửa `index.html`, `bridge.py`, `chatgpt.py` hoặc nội dung tiện ích, chạy `python3 package_installers.py` để cập nhật tệp `installers.js`.
+- Khi lưu trữ app ở một kho GitHub khác, cập nhật URL công khai trong nguồn và cấu hình nguồn CORS phù hợp. Triển khai GitHub Pages từ nhánh `main`, thư mục gốc.
