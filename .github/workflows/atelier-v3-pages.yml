@@ -44,7 +44,8 @@ jobs:
       - name: Install and check the local gateway
         shell: pwsh
         run: |
-          $setup = Start-Process -FilePath ".\Atelier3D-Setup.exe" -ArgumentList "/S" -Wait -PassThru
+          $setup = Start-Process -FilePath ".\Atelier3D-Setup.exe" -ArgumentList "/S" -PassThru
+          if (-not $setup.WaitForExit(20000)) { throw "Setup did not finish in 20 seconds" }
           if ($setup.ExitCode -ne 0) { throw "Setup exit code $($setup.ExitCode)" }
           $root = Join-Path $env:LOCALAPPDATA "Atelier 3D"
           $health = $null
