@@ -6,16 +6,25 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+if __package__:
+    from .chatgpt import ChatGPT
+else:
+    from chatgpt import ChatGPT
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "outputs"
+PUBLIC_URL = "https://neito112.github.io/atelier-3d/"
 VERSION = "2025-11-25"
 DEMO = [
     {"tool":"box","args":{"name":"Sàn","size":[6,5,0.15],"at":[0,0,-0.075],"color":"#B8A48B","bevel":0.02}},
@@ -111,6 +120,17 @@ for step in plan:
 
 bpy.ops.wm.save_as_mainfile(filepath=str(job / 'scene.blend'))
 if render:
+    scene.render.filepath = str(job / 'preview.tmp.png')
+    scene.render.resolution_percentage = 36
+    full_samples = scene.cycles.samples
+    scene.cycles.samples = min(full_samples, 6)
+    print('ATELIER_PREVIEW', flush=True)
+    bpy.ops.render.render(write_still=True)
+    (job / 'preview.tmp.png').replace(job / 'preview.png')
+    scene.render.filepath = str(job / 'render.png')
+    scene.render.resolution_percentage = 100
+    scene.cycles.samples = full_samples
+    print('ATELIER_FINAL', flush=True)
     bpy.ops.render.render(write_still=True)
 """
 
@@ -120,22 +140,15 @@ PROVIDERS = {
     "gemini": ("ATELIER_GEMINI_KEY", "https://generativelanguage.googleapis.com/v1beta/models"),
     "openrouter": ("ATELIER_OPENROUTER_KEY", "https://openrouter.ai/api/v1/chat/completions"),
     "compatible": ("ATELIER_COMPATIBLE_KEY", None),
+    "anthropic-compatible": ("ATELIER_ANTHROPIC_COMPATIBLE_KEY", None),
 }
 
 
-def plan_with_model(data):
-    provider, model = data.get("provider"), data.get("model", "").strip()
-    if provider not in PROVIDERS or not re.fullmatch(r"[\w./:@-]{1,160}", model):
+def plan_with_model(data, chatgpt):
+    provider = data.get("provider")
+    model = data.get("model", "").strip()
+    if provider != "chatgpt" and (provider not in PROVIDERS or not re.fullmatch(r"[\w./:@-]{1,160}", model)):
         raise ValueError("Chọn nhà cung cấp và nhập đúng mã model.")
-    key_var, url = PROVIDERS[provider]
-    key = data.get("key", "").strip() or os.getenv(key_var, "")
-    if not key and provider != "compatible":
-        raise ValueError(f"Nhập API key hoặc cấu hình {key_var}.")
-    if provider == "compatible":
-        url = os.getenv("ATELIER_COMPATIBLE_URL", "").rstrip("/")
-        if not url:
-            raise ValueError("Cấu hình ATELIER_COMPATIBLE_URL, ví dụ http://127.0.0.1:11434/v1.")
-        url += "/chat/completions"
     prompt = data.get("prompt", "").strip()
     if not prompt or len(prompt) > 8000:
         raise ValueError("Nhập yêu cầu dài từ 1 đến 8000 ký tự.")
@@ -150,9 +163,46 @@ def plan_with_model(data):
               '{"summary":"Vietnamese summary","steps":[{"tool":"name","args":{}}]}. '
               'Maximum 60 steps. Never use shell commands, scripts, credential operations or network tools. '
               'If you cannot satisfy the request with available tools, explain in summary and use empty steps. ' + context)
+    message = chatgpt.plan(system, prompt) if provider == "chatgpt" else provider_message(provider, model, data, system, prompt)
+    try:
+        message = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", message.strip())
+        result = json.loads(message)
+        if not isinstance(result["summary"], str) or not isinstance(result["steps"], list) or len(result["steps"]) > 60:
+            raise ValueError()
+        if tools is None and result["steps"]:
+            validate(result["steps"])
+        return result
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise ValueError(f"Model trả dữ liệu dựng hình chưa hợp lệ. {exc}") from exc
+
+
+def provider_message(provider, model, data, system, prompt):
+    key_var, url = PROVIDERS[provider]
+    key = data.get("key", "").strip() or os.getenv(key_var, "")
+    compatible = provider in ("compatible", "anthropic-compatible")
+    if not key and not compatible:
+        raise ValueError(f"Nhập API key hoặc cấu hình {key_var}.")
+    anthropic = provider in ("anthropic", "anthropic-compatible")
+    if compatible:
+        variable = "ATELIER_ANTHROPIC_COMPATIBLE_URL" if anthropic else "ATELIER_COMPATIBLE_URL"
+        base = data.get("baseURL", "").strip() or os.getenv(variable, "")
+        parsed = urllib.parse.urlsplit(base)
+        local = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+        if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or (
+            parsed.scheme != "https" and not (parsed.scheme == "http" and local)
+        ):
+            raise ValueError("Nhập URL gốc HTTPS của API tương thích, hoặc dùng HTTP trên localhost.")
+        suffix = "/messages" if anthropic else "/chat/completions"
+        url = base.rstrip("/")
+        if not url.endswith(suffix):
+            if not url.endswith("/v1"):
+                url += "/v1"
+            url += suffix
     headers = {"Content-Type":"application/json"}
-    if provider == "anthropic":
-        headers.update({"x-api-key":key,"anthropic-version":"2023-06-01"})
+    if anthropic:
+        headers["anthropic-version"] = "2023-06-01"
+        if key:
+            headers["x-api-key"] = key
         body = {"model":model,"max_tokens":6000,"system":system,"messages":[{"role":"user","content":prompt}]}
     elif provider == "gemini":
         headers["x-goog-api-key"] = key
@@ -175,21 +225,13 @@ def plan_with_model(data):
     except (urllib.error.URLError, TimeoutError) as exc:
         raise ValueError("Máy làm việc không kết nối được nhà cung cấp LLM.") from exc
     try:
-        if provider == "anthropic":
-            message = "".join(part.get("text","") for part in reply["content"])
-        elif provider == "gemini":
-            message = "".join(part.get("text","") for part in reply["candidates"][0]["content"]["parts"] if not part.get("thought"))
-        else:
-            message = reply["choices"][0]["message"]["content"]
-        message = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", message.strip())
-        result = json.loads(message)
-        if not isinstance(result["summary"], str) or not isinstance(result["steps"], list) or len(result["steps"]) > 60:
-            raise ValueError()
-        if tools is None and result["steps"]:
-            validate(result["steps"])
-        return result
-    except (KeyError, IndexError, TypeError, AttributeError, ValueError) as exc:
-        raise ValueError(f"Model trả kế hoạch chưa hợp lệ. {exc}") from exc
+        if anthropic:
+            return "".join(part.get("text", "") for part in reply["content"])
+        if provider == "gemini":
+            return "".join(part.get("text", "") for part in reply["candidates"][0]["content"]["parts"] if not part.get("thought"))
+        return reply["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        raise ValueError("Nhà cung cấp trả cấu trúc phản hồi không tương thích.") from exc
 
 
 FIELDS = {
@@ -240,17 +282,20 @@ def validate(steps):
 
 
 class Workstation:
-    def __init__(self, blender):
+    def __init__(self, blender, output=OUTPUT):
         self.blender = blender
+        self.output = output
         self.slot = threading.BoundedSemaphore(1)
         self.jobs = {}
 
     def launch(self, steps):
         validate(steps)
+        if not self.blender:
+            raise ValueError("Chưa tìm thấy Blender trên máy.")
         if not self.slot.acquire(blocking=False):
             raise ValueError("Blender đang chạy một tác vụ. Chờ tác vụ hiện tại hoàn tất.")
         ident = secrets.token_hex(8)
-        folder = OUTPUT / ident
+        folder = self.output / ident
         try:
             folder.mkdir(parents=True)
             (folder / "plan.json").write_text(json.dumps(steps,ensure_ascii=False), encoding="utf-8")
@@ -324,12 +369,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self.permitted():
             return
         if path == "/health":
-            self.response(200,{"ok":True,"name":"Atelier 3D Bridge"})
-        elif match := re.fullmatch(r"/files/([a-f0-9]{16})/(scene\.blend|render\.png|blender\.log)",path):
+            self.response(200,{"ok":True,"name":"Atelier 3D Bridge","version":2,"blender":bool(self.server.work.blender)})
+        elif match := re.fullmatch(r"/events/([a-f0-9]{16})", path):
+            self.stream_job(match[1])
+        elif match := re.fullmatch(r"/files/([a-f0-9]{16})/(scene\.blend|render\.png|preview\.png|blender\.log)",path):
             ident, name = match.groups()
-            file = OUTPUT / ident / name
+            file = self.server.work.output / ident / name
             if file.is_file():
-                mime = {"render.png":"image/png","scene.blend":"application/octet-stream","blender.log":"text/plain"}[name]
+                mime = {"render.png":"image/png","preview.png":"image/png","scene.blend":"application/octet-stream","blender.log":"text/plain"}[name]
                 self.response(200,file.read_bytes(),mime)
             else:
                 self.response(404,{"error":"Chưa có tệp kết quả."})
@@ -337,6 +384,61 @@ class Handler(BaseHTTPRequestHandler):
             self.response(405,{"error":"MCP chỉ nhận POST."})
         else:
             self.response(404,{"error":"Không tìm thấy đường dẫn."})
+
+    def stream_job(self, ident):
+        work = self.server.work
+        if ident not in work.jobs:
+            self.response(404, {"error":"Không tìm thấy tác vụ Blender."})
+            return
+        origin = self.headers.get("Origin")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, no-transform")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        if origin in self.server.origins:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.end_headers()
+        folder = work.output / ident
+        log = folder / "blender.log"
+        offset, preview = 0, False
+        phase = "Đang chuẩn bị cảnh"
+        last_sample = None
+        deadline = time.monotonic() + 3650
+
+        def emit(event):
+            self.wfile.write((json.dumps(event, ensure_ascii=False) + "\n").encode())
+            self.wfile.flush()
+
+        try:
+            while time.monotonic() < deadline:
+                if log.is_file():
+                    with log.open("rb") as stream:
+                        stream.seek(offset)
+                        for line in stream:
+                            if not line.endswith(b"\n"):
+                                break
+                            offset += len(line)
+                            row = line.decode("utf-8", "replace")
+                            if row.startswith("ATELIER_PREVIEW"):
+                                phase, last_sample = "Đang render bản xem trước", None
+                            elif row.startswith("ATELIER_FINAL"):
+                                phase, last_sample = "Đang render ảnh chính", None
+                            elif sample := re.search(r"Sample (\d+)/(\d+)", row):
+                                last_sample = [int(x) for x in sample.groups()]
+                if not preview and (folder / "preview.png").is_file():
+                    preview = True
+                    emit({"type":"preview", "path":f"/files/{ident}/preview.png"})
+                current = work.jobs[ident]
+                if current["state"] != "running":
+                    emit({"type":"result", **current})
+                    return
+                emit({"type":"progress", "message":phase, "sample":last_sample})
+                time.sleep(0.5)
+            emit({"type":"result", "state":"error", "error":"Luồng theo dõi đã hết thời gian."})
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def do_POST(self):
         if not self.permitted():
@@ -349,7 +451,11 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data,dict):
                 raise ValueError("Yêu cầu cần là đối tượng JSON.")
             if self.path == "/plan":
-                self.response(200,plan_with_model(data))
+                self.response(200,plan_with_model(data, self.server.chatgpt))
+            elif self.path == "/chatgpt/connect":
+                self.response(200,self.server.chatgpt.login())
+            elif self.path == "/chatgpt/status":
+                self.response(200,self.server.chatgpt.status())
             elif self.path == "/demo":
                 self.response(200,{"summary":"Dựng góc trưng bày với đá be, gỗ nâu, ánh sáng mềm và render Cycles.","steps":DEMO})
             elif self.path == "/mcp":
@@ -405,20 +511,32 @@ class Handler(BaseHTTPRequestHandler):
         self.response(200,base | {"result":result})
 
 
+def create_server(port=8765, blender="blender", origins=(), token=None, output=OUTPUT, profile=None):
+    server = ThreadingHTTPServer(("127.0.0.1",port), Handler)
+    server.work = Workstation(shutil.which(blender) if blender else None, output)
+    server.chatgpt = ChatGPT(profile)
+    server.hosts = {f"{host}:{server.server_port}" for host in ("localhost","127.0.0.1")}
+    server.origins = {f"http://{host}" for host in server.hosts} | set(origins) | {"https://neito112.github.io"}
+    token = token or secrets.token_urlsafe(24)
+    server.token = ("Bearer " + token).encode()
+    return server, token
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port",type=int,default=8765)
-    parser.add_argument("--blender",default=os.getenv("BLENDER_BIN","blender"))
-    parser.add_argument("--origin",action="append",default=[])
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--blender", default=os.getenv("BLENDER_BIN", "blender"))
+    parser.add_argument("--origin", action="append", default=[])
+    parser.add_argument("--open", action="store_true", help="Open the locally served app with this session pairing code.")
     config = parser.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1",config.port),Handler)
-    server.work = Workstation(config.blender)
-    server.hosts = {f"{host}:{config.port}" for host in ("localhost","127.0.0.1")}
-    server.origins = {f"http://{host}" for host in server.hosts} | set(config.origin) | {"https://neito112.github.io"}
-    token = os.getenv("ATELIER_TOKEN") or secrets.token_urlsafe(24)
-    server.token = ("Bearer " + token).encode()
-    print(f"Atelier 3D · http://127.0.0.1:{config.port}\nMã ghép nối: {token}\nKết quả: {OUTPUT}",flush=True)
+    server, token = create_server(config.port, config.blender, config.origin, os.getenv("ATELIER_TOKEN"))
+    print(f"Atelier 3D · http://127.0.0.1:{config.port}/#pair={token}\nMã kết nối: {token}\nKết quả: {OUTPUT}", flush=True)
+    if config.open:
+        webbrowser.open(f"http://127.0.0.1:{server.server_port}/#pair={token}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        pass
+    finally:
+        server.chatgpt.close()
         server.server_close()
