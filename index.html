@@ -146,8 +146,10 @@ async function readEventStream(response, id) {
         buffer = buffer.slice(lineEnd + 1);
         if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /,""));
         if (!line && data.length) {
-          const message = JSON.parse(data.join("\n"));
+          const payload = data.join("\n");
           data = [];
+          if (!payload.trim()) continue;
+          const message = JSON.parse(payload);
           if (message?.id === id) return message;
         }
       }
