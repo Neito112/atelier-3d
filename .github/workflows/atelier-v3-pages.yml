@@ -1,0 +1,34 @@
+name: Deploy Atelier 3D
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'atelier-v3-source.b64'
+      - '.github/workflows/atelier-v3-pages.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: atelier-pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app and installers
+        run: |
+          base64 -d atelier-v3-source.b64 > /tmp/atelier-source.zip
+          python -m zipfile -e /tmp/atelier-source.zip /tmp/atelier-src
+          python /tmp/atelier-src/package_installers.py
+          mkdir -p public
+          cp /tmp/atelier-src/index.html /tmp/atelier-src/accounts.js public/
+          cp -R /tmp/atelier-src/downloads public/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - uses: actions/deploy-pages@v4
