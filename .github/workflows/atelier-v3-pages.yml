@@ -34,3 +34,45 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
+  windows-smoke:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+      - name: Install and check the local gateway
+        shell: pwsh
+        run: |
+          $setup = Start-Process -FilePath ".\Atelier3D-Setup.exe" -ArgumentList "/S" -PassThru
+          if (-not $setup.WaitForExit(20000)) { throw "Setup did not finish in 20 seconds" }
+          if ($setup.ExitCode -ne 0) { throw "Setup exit code $($setup.ExitCode)" }
+          $root = Join-Path $env:LOCALAPPDATA "Atelier 3D"
+          $health = $null
+          for ($i = 0; $i -lt 20; $i++) {
+            try {
+              $file = Get-ChildItem -LiteralPath $root -Filter "app-*.port" | Select-Object -First 1
+              if ($file) {
+                $port = Get-Content -LiteralPath $file.FullName
+                $record = Join-Path $env:USERPROFILE ".atelier-3d\live-documents\gateway-$port.json"
+                $token = (Get-Content -LiteralPath $record -Raw | ConvertFrom-Json).token
+                $health = Invoke-RestMethod "http://127.0.0.1:$port/health" -Headers @{Authorization="Bearer $token"} -TimeoutSec 2
+                if ($health.desktopVersion -and $health.accountRender) { break }
+              }
+            } catch {}
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not ($health.desktopVersion -and $health.accountRender)) { throw "Installed Atelier gateway did not start" }
+          $shortcut = Join-Path ([Environment]::GetFolderPath("Programs")) "Atelier 3D.lnk"
+          if (-not (Test-Path -LiteralPath $shortcut)) { throw "Start menu shortcut missing" }
+          Write-Output "Windows setup, shortcut and local gateway passed."
+  deploy:
+    needs: windows-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/deploy-pages@v4
